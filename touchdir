@@ -1,0 +1,77 @@
+#!/usr/bin/env php
+<?php
+require_once __DIR__ . '/vendor/autoload.php';
+
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Exception\RuntimeException;
+use Symfony\Component\Console\Helper\Table;
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+
+$console = new Application('touchdir', '1.0.0');
+$console
+    ->register('touchdir')
+    ->addArgument('dir', InputArgument::REQUIRED, 'Target directory')
+    ->addOption('dry-run', 'N', InputOption::VALUE_NONE, 'Show what would be updated without actual updating')
+    ->setDescription('Update timestamp of directories to the same timestamp of the newest file in the directory recursively')
+    ->setCode(function (InputInterface $input, OutputInterface $output) {
+
+        if (!is_dir($dir = $input->getArgument('dir'))) {
+            throw new RuntimeException("{$dir} is not a directory");
+        }
+
+        $table = new Table($output);
+        $table->setStyle('compact');
+
+        $files = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        $newestTime = [];
+        $failed = 0;
+
+        /** @var SplFileInfo $file */
+        foreach ($files as $file) {
+            $path = $file->getPathname();
+            $parentPath = $file->getPath();
+            $time = $file->getMTime();
+
+            if ($file->isDir()) {
+                if (isset($newestTime[$path])) {
+                    $time = $newestTime[$path];
+                }
+
+                $format = 'info';
+
+                if (!$input->getOption('dry-run') && !touch($path, $time)) {
+                    $format = 'error';
+                    $failed++;
+                }
+
+                $table->addRow([
+                    sprintf('<%s>%s</>', $format, $path),
+                    sprintf('<%s>%s</>', $format, date('Y-m-d H:i:s', $time)),
+                ]);
+            } elseif ($input->getOption('dry-run')) {
+                $table->addRow([$path, date('Y-m-d H:i:s', $time)]);
+            }
+
+            if (!isset($newestTime[$parentPath]) || $time > $newestTime[$parentPath]) {
+                $newestTime[$parentPath] = $time;
+            }
+        }
+
+        $table->render();
+
+        if (!$input->getOption('dry-run') && $failed) {
+            $output->writeln("<error>Touching failed: {$failed} directories</>");
+        }
+    })
+;
+$console
+    ->setDefaultCommand('touchdir', true)
+    ->run()
+;
